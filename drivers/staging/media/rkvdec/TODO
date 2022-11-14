@@ -9,3 +9,14 @@
   code in rkvdec_request_validate and cedrus_request_validate.
   The helper needs to the driver private data associated with
   the videobuf2 queue, from a media request.
+
+
+* h264-encoder:
+- where does sps and pps come from?
+- bootlin testapp is creating fixed bitstream_fd
+- allocate regmap fields
+- add encoder ctrls
+- add compatibles
+- mapping between V4L2_PIX_FMT and VEPU54x_HW_FMT
+- implement interrupt handling
+- add feedback parameters in irq handler

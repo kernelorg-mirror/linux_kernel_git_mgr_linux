@@ -1617,6 +1617,17 @@ struct v4l2_ctrl_h264_encode_params {
 
 	__u32 flags; /* V4L2_H264_ENCODE_FLAG_ */
 
+	/* Nal parameters */
+	__u8 nal_reference_idc; // 2 bit
+	__u8 nalu_type; // 5 bit
+
+	/* Unchanged parameters */
+	__u8 num_ref_idx_override; // bool
+
+	/* idr mmco flag */
+	__u8 no_output_of_prior_pics; // bool
+	__u8 long_term_reference_flag; // bool
+
 	/* Reference */
 
 	__u64 reference_ts;
@@ -1639,6 +1650,8 @@ struct v4l2_ctrl_h264_encode_rc {
 	__u32 cp_target[10];
 	__s32 cp_target_error[6];
 	__s32 cp_qp_delta[7];
+
+	__u32 target_bits;
 };
 
 #define V4L2_CID_STATELESS_H264_ENCODE_FEEDBACK	(V4L2_CID_CODEC_STATELESS_BASE + 10)
