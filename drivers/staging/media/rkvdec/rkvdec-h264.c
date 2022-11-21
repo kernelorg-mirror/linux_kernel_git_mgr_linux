@@ -907,7 +907,7 @@ static void config_registers(struct rkvpu_ctx *ctx,
 	reg = RKVDEC_MODE(RKVDEC_MODE_H264);
 	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_SYSCTRL);
 
-	f = &ctx->decoded_fmt;
+	f = &ctx->dst_fmt;
 	dst_fmt = &f->fmt.pix_mp;
 	hor_virstride = (sps->bit_depth_luma_minus8 + 8) * dst_fmt->width / 8;
 	ver_virstride = round_up(dst_fmt->height, 16);
@@ -1057,8 +1057,8 @@ static int rkvdec_h264_validate_sps(struct rkvpu_ctx *ctx,
 	if (!(sps->flags & V4L2_H264_SPS_FLAG_FRAME_MBS_ONLY))
 		height *= 2;
 
-	if (width > ctx->coded_fmt.fmt.pix_mp.width ||
-	    height > ctx->coded_fmt.fmt.pix_mp.height)
+	if (width > ctx->src_fmt.fmt.pix_mp.width ||
+	    height > ctx->src_fmt.fmt.pix_mp.height)
 		return -EINVAL;
 
 	return 0;
@@ -1183,7 +1183,7 @@ static int rkvdec_h264_try_ctrl(struct rkvpu_ctx *ctx, struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-const struct rkvpu_coded_fmt_ops rkvdec_h264_fmt_ops = {
+const struct rkvpu_ops rkvdec_h264_fmt_ops = {
 	.adjust_fmt = rkvdec_h264_adjust_fmt,
 	.start = rkvdec_h264_start,
 	.stop = rkvdec_h264_stop,

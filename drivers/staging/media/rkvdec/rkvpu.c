@@ -30,7 +30,7 @@
 static int rkvpu_try_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct rkvpu_ctx *ctx = container_of(ctrl->handler, struct rkvpu_ctx, ctrl_hdl);
-	const struct rkvpu_coded_fmt_desc *desc = ctx->coded_fmt_desc;
+	const struct rkvpu_fmt_desc *desc = ctx->src_fmt_desc;
 
 	if (desc->ops->try_ctrl)
 		return desc->ops->try_ctrl(ctx, ctrl);
@@ -88,7 +88,7 @@ static const struct rkvpu_ctrls rkvdec_h264_ctrls = {
 	.num_ctrls = ARRAY_SIZE(rkvdec_h264_ctrl_descs),
 };
 
-static const u32 rkvpu_h264_vp9_decoded_fmts[] = {
+static const u32 rkvpu_h264_vp9_dst_fmts[] = {
 	V4L2_PIX_FMT_NV12,
 };
 
@@ -112,7 +112,7 @@ static const struct rkvpu_ctrls rkvdec_vp9_ctrls = {
 	.num_ctrls = ARRAY_SIZE(rkvdec_vp9_ctrl_descs),
 };
 
-static const struct rkvpu_coded_fmt_desc rkvdec_coded_fmts[] = {
+static const struct rkvpu_fmt_desc rkvpu_src_fmts[] = {
 	{
 		.fourcc = V4L2_PIX_FMT_H264_SLICE,
 		.frmsize = {
@@ -125,8 +125,8 @@ static const struct rkvpu_coded_fmt_desc rkvdec_coded_fmts[] = {
 		},
 		.ctrls = &rkvdec_h264_ctrls,
 		.ops = &rkvdec_h264_fmt_ops,
-		.num_decoded_fmts = ARRAY_SIZE(rkvpu_h264_vp9_decoded_fmts),
-		.decoded_fmts = rkvpu_h264_vp9_decoded_fmts,
+		.num_dst_fmts = ARRAY_SIZE(rkvpu_h264_vp9_dst_fmts),
+		.dst_fmts = rkvpu_h264_vp9_dst_fmts,
 		.subsystem_flags = VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF,
 	},
 	{
@@ -141,19 +141,19 @@ static const struct rkvpu_coded_fmt_desc rkvdec_coded_fmts[] = {
 		},
 		.ctrls = &rkvdec_vp9_ctrls,
 		.ops = &rkvdec_vp9_fmt_ops,
-		.num_decoded_fmts = ARRAY_SIZE(rkvpu_h264_vp9_decoded_fmts),
-		.decoded_fmts = rkvpu_h264_vp9_decoded_fmts,
+		.num_dst_fmts = ARRAY_SIZE(rkvpu_h264_vp9_dst_fmts),
+		.dst_fmts = rkvpu_h264_vp9_dst_fmts,
 	}
 };
 
-static const struct rkvpu_coded_fmt_desc *
-rkvpu_find_coded_fmt_desc(u32 fourcc)
+static const struct rkvpu_fmt_desc *
+rkvpu_find_src_fmt_desc(u32 fourcc)
 {
 	unsigned int i;
 
-	for (i = 0; i < ARRAY_SIZE(rkvpu_coded_fmts); i++) {
-		if (rkvpu_coded_fmts[i].fourcc == fourcc)
-			return &rkvpu_coded_fmts[i];
+	for (i = 0; i < ARRAY_SIZE(rkvpu_src_fmts); i++) {
+		if (rkvpu_src_fmts[i].fourcc == fourcc)
+			return &rkvpu_src_fmts[i];
 	}
 
 	return NULL;
@@ -171,31 +171,31 @@ static void rkvpu_reset_fmt(struct rkvpu_ctx *ctx, struct v4l2_format *f,
 	f->fmt.pix_mp.xfer_func = V4L2_XFER_FUNC_DEFAULT;
 }
 
-static void rkvpu_reset_coded_fmt(struct rkvdec_ctx *ctx)
+static void rkvpu_reset_src_fmt(struct rkvpu_ctx *ctx)
 {
-	struct v4l2_format *f = &ctx->coded_fmt;
+	struct v4l2_format *f = &ctx->src_fmt;
 
-	ctx->coded_fmt_desc = &rkvpu_coded_fmts[0];
-	rkvpu_reset_fmt(ctx, f, ctx->coded_fmt_desc->fourcc);
+	ctx->src_fmt_desc = &rkvpu_src_fmts[0];
+	rkvpu_reset_fmt(ctx, f, ctx->src_fmt_desc->fourcc);
 
 	f->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	f->fmt.pix_mp.width = ctx->coded_fmt_desc->frmsize.min_width;
-	f->fmt.pix_mp.height = ctx->coded_fmt_desc->frmsize.min_height;
+	f->fmt.pix_mp.width = ctx->src_fmt_desc->frmsize.min_width;
+	f->fmt.pix_mp.height = ctx->src_fmt_desc->frmsize.min_height;
 
-	if (ctx->coded_fmt_desc->ops->adjust_fmt)
-		ctx->coded_fmt_desc->ops->adjust_fmt(ctx, f);
+	if (ctx->src_fmt_desc->ops->adjust_fmt)
+		ctx->src_fmt_desc->ops->adjust_fmt(ctx, f);
 }
 
-static void rkvpu_reset_decoded_fmt(struct rkvdec_ctx *ctx)
+static void rkvpu_reset_dst_fmt(struct rkvpu_ctx *ctx)
 {
-	struct v4l2_format *f = &ctx->decoded_fmt;
+	struct v4l2_format *f = &ctx->dst_fmt;
 
-	rkvpu_reset_fmt(ctx, f, ctx->coded_fmt_desc->decoded_fmts[0]);
+	rkvpu_reset_fmt(ctx, f, ctx->src_fmt_desc->dst_fmts[0]);
 	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	v4l2_fill_pixfmt_mp(&f->fmt.pix_mp,
-			    ctx->coded_fmt_desc->decoded_fmts[0],
-			    ctx->coded_fmt.fmt.pix_mp.width,
-			    ctx->coded_fmt.fmt.pix_mp.height);
+			    ctx->src_fmt_desc->dst_fmts[0],
+			    ctx->src_fmt.fmt.pix_mp.width,
+			    ctx->src_fmt.fmt.pix_mp.height);
 	f->fmt.pix_mp.plane_fmt[0].sizeimage += 128 *
 		DIV_ROUND_UP(f->fmt.pix_mp.width, 16) *
 		DIV_ROUND_UP(f->fmt.pix_mp.height, 16);
@@ -204,12 +204,12 @@ static void rkvpu_reset_decoded_fmt(struct rkvdec_ctx *ctx)
 static int rkvpu_enum_framesizes(struct file *file, void *priv,
 				  struct v4l2_frmsizeenum *fsize)
 {
-	const struct rkvpu_coded_fmt_desc *fmt;
+	const struct rkvpu_fmt_desc *fmt;
 
 	if (fsize->index != 0)
 		return -EINVAL;
 
-	fmt = rkvpu_find_coded_fmt_desc(fsize->pixel_format);
+	fmt = rkvpu_find_src_fmt_desc(fsize->pixel_format);
 	if (!fmt)
 		return -EINVAL;
 
@@ -237,32 +237,32 @@ static int rkvpu_try_capture_fmt(struct file *file, void *priv,
 {
 	struct v4l2_pix_format_mplane *pix_mp = &f->fmt.pix_mp;
 	struct rkvpu_ctx *ctx = fh_to_rkvpu_ctx(priv);
-	const struct rkvpu_coded_fmt_desc *coded_desc;
+	const struct rkvpu_fmt_desc *src_desc;
 	unsigned int i;
 
 	/*
-	 * The codec context should point to a coded format desc, if the format
-	 * on the coded end has not been set yet, it should point to the
+	 * The codec context should point to a src format desc, if the format
+	 * on the src end has not been set yet, it should point to the
 	 * default value.
 	 */
-	coded_desc = ctx->coded_fmt_desc;
-	if (WARN_ON(!coded_desc))
+	src_desc = ctx->src_fmt_desc;
+	if (WARN_ON(!src_desc))
 		return -EINVAL;
 
-	for (i = 0; i < coded_desc->num_decoded_fmts; i++) {
-		if (coded_desc->decoded_fmts[i] == pix_mp->pixelformat)
+	for (i = 0; i < src_desc->num_dst_fmts; i++) {
+		if (src_desc->dst_fmts[i] == pix_mp->pixelformat)
 			break;
 	}
 
-	if (i == coded_desc->num_decoded_fmts)
-		pix_mp->pixelformat = coded_desc->decoded_fmts[0];
+	if (i == src_desc->num_dst_fmts)
+		pix_mp->pixelformat = src_desc->dst_fmts[0];
 
-	/* Always apply the frmsize constraint of the coded end. */
-	pix_mp->width = max(pix_mp->width, ctx->coded_fmt.fmt.pix_mp.width);
-	pix_mp->height = max(pix_mp->height, ctx->coded_fmt.fmt.pix_mp.height);
+	/* Always apply the frmsize constraint of the src end. */
+	pix_mp->width = max(pix_mp->width, ctx->src_fmt.fmt.pix_mp.width);
+	pix_mp->height = max(pix_mp->height, ctx->src_fmt.fmt.pix_mp.height);
 	v4l2_apply_frmsize_constraints(&pix_mp->width,
 				       &pix_mp->height,
-				       &coded_desc->frmsize);
+				       &src_desc->frmsize);
 
 	v4l2_fill_pixfmt_mp(pix_mp, pix_mp->pixelformat,
 			    pix_mp->width, pix_mp->height);
@@ -280,12 +280,12 @@ static int rkvpu_try_output_fmt(struct file *file, void *priv,
 {
 	struct v4l2_pix_format_mplane *pix_mp = &f->fmt.pix_mp;
 	struct rkvpu_ctx *ctx = fh_to_rkvpu_ctx(priv);
-	const struct rkvpu_coded_fmt_desc *desc;
+	const struct rkvpu_fmt_desc *desc;
 
-	desc = rkvpu_find_coded_fmt_desc(pix_mp->pixelformat);
+	desc = rkvpu_find_src_fmt_desc(pix_mp->pixelformat);
 	if (!desc) {
-		pix_mp->pixelformat = rkvpu_coded_fmts[0].fourcc;
-		desc = &rkvpu_coded_fmts[0];
+		pix_mp->pixelformat = rkvpu_src_fmts[0].fourcc;
+		desc = &rkvpu_src_fmts[0];
 	}
 
 	v4l2_apply_frmsize_constraints(&pix_mp->width,
@@ -293,7 +293,7 @@ static int rkvpu_try_output_fmt(struct file *file, void *priv,
 				       &desc->frmsize);
 
 	pix_mp->field = V4L2_FIELD_NONE;
-	/* All coded formats are considered single planar for now. */
+	/* All src formats are considered single planar for now. */
 	pix_mp->num_planes = 1;
 
 	if (desc->ops->adjust_fmt) {
@@ -324,7 +324,7 @@ static int rkvpu_s_capture_fmt(struct file *file, void *priv,
 	if (ret)
 		return ret;
 
-	ctx->decoded_fmt = *f;
+	ctx->dst_fmt = *f;
 	return 0;
 }
 
@@ -333,7 +333,7 @@ static int rkvpu_s_output_fmt(struct file *file, void *priv,
 {
 	struct rkvpu_ctx *ctx = fh_to_rkvpu_ctx(priv);
 	struct v4l2_m2m_ctx *m2m_ctx = ctx->fh.m2m_ctx;
-	const struct rkvpu_coded_fmt_desc *desc;
+	const struct rkvpu_fmt_desc *desc;
 	struct v4l2_format *cap_fmt;
 	struct vb2_queue *peer_vq, *vq;
 	int ret;
@@ -346,7 +346,7 @@ static int rkvpu_s_output_fmt(struct file *file, void *priv,
 	vq = v4l2_m2m_get_vq(m2m_ctx, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
 	if (vb2_is_streaming(vq) ||
 	    (vb2_is_busy(vq) &&
-	     f->fmt.pix_mp.pixelformat != ctx->coded_fmt.fmt.pix_mp.pixelformat))
+	     f->fmt.pix_mp.pixelformat != ctx->src_fmt.fmt.pix_mp.pixelformat))
 		return -EBUSY;
 
 	/*
@@ -362,25 +362,25 @@ static int rkvpu_s_output_fmt(struct file *file, void *priv,
 	if (ret)
 		return ret;
 
-	desc = rkvpu_find_coded_fmt_desc(f->fmt.pix_mp.pixelformat);
+	desc = rkvpu_find_src_fmt_desc(f->fmt.pix_mp.pixelformat);
 	if (!desc)
 		return -EINVAL;
-	ctx->coded_fmt_desc = desc;
-	ctx->coded_fmt = *f;
+	ctx->src_fmt_desc = desc;
+	ctx->src_fmt = *f;
 
 	/*
-	 * Current decoded format might have become invalid with newly
+	 * Current desrc format might have become invalid with newly
 	 * selected codec, so reset it to default just to be safe and
 	 * keep internal driver state sane. User is mandated to set
-	 * the decoded format again after we return, so we don't need
+	 * the desrc format again after we return, so we don't need
 	 * anything smarter.
 	 *
-	 * Note that this will propagates any size changes to the decoded format.
+	 * Note that this will propagates any size changes to the desrc format.
 	 */
-	rkvpu_reset_decoded_fmt(ctx);
+	rkvpu_reset_dst_fmt(ctx);
 
 	/* Propagate colorspace information to capture. */
-	cap_fmt = &ctx->decoded_fmt;
+	cap_fmt = &ctx->dst_fmt;
 	cap_fmt->fmt.pix_mp.colorspace = f->fmt.pix_mp.colorspace;
 	cap_fmt->fmt.pix_mp.xfer_func = f->fmt.pix_mp.xfer_func;
 	cap_fmt->fmt.pix_mp.ycbcr_enc = f->fmt.pix_mp.ycbcr_enc;
@@ -397,7 +397,7 @@ static int rkvpu_g_output_fmt(struct file *file, void *priv,
 {
 	struct rkvpu_ctx *ctx = fh_to_rkvpu_ctx(priv);
 
-	*f = ctx->coded_fmt;
+	*f = ctx->src_fmt;
 	return 0;
 }
 
@@ -406,17 +406,17 @@ static int rkvpu_g_capture_fmt(struct file *file, void *priv,
 {
 	struct rkvpu_ctx *ctx = fh_to_rkvpu_ctx(priv);
 
-	*f = ctx->decoded_fmt;
+	*f = ctx->dst_fmt;
 	return 0;
 }
 
 static int rkvpu_enum_output_fmt(struct file *file, void *priv,
 				  struct v4l2_fmtdesc *f)
 {
-	if (f->index >= ARRAY_SIZE(rkvpu_coded_fmts))
+	if (f->index >= ARRAY_SIZE(rkvpu_src_fmts))
 		return -EINVAL;
 
-	f->pixelformat = rkvpu_coded_fmts[f->index].fourcc;
+	f->pixelformat = rkvpu_src_fmts[f->index].fourcc;
 	return 0;
 }
 
@@ -425,13 +425,13 @@ static int rkvpu_enum_capture_fmt(struct file *file, void *priv,
 {
 	struct rkvpu_ctx *ctx = fh_to_rkvpu_ctx(priv);
 
-	if (WARN_ON(!ctx->coded_fmt_desc))
+	if (WARN_ON(!ctx->src_fmt_desc))
 		return -EINVAL;
 
-	if (f->index >= ctx->coded_fmt_desc->num_decoded_fmts)
+	if (f->index >= ctx->src_fmt_desc->num_dst_fmts)
 		return -EINVAL;
 
-	f->pixelformat = ctx->coded_fmt_desc->decoded_fmts[f->index];
+	f->pixelformat = ctx->src_fmt_desc->dst_fmts[f->index];
 	return 0;
 }
 
@@ -472,9 +472,9 @@ static int rkvpu_queue_setup(struct vb2_queue *vq, unsigned int *num_buffers,
 	unsigned int i;
 
 	if (V4L2_TYPE_IS_OUTPUT(vq->type))
-		f = &ctx->coded_fmt;
+		f = &ctx->src_fmt;
 	else
-		f = &ctx->decoded_fmt;
+		f = &ctx->dst_fmt;
 
 	if (*num_planes) {
 		if (*num_planes != f->fmt.pix_mp.num_planes)
@@ -501,9 +501,9 @@ static int rkvpu_buf_prepare(struct vb2_buffer *vb)
 	unsigned int i;
 
 	if (V4L2_TYPE_IS_OUTPUT(vq->type))
-		f = &ctx->coded_fmt;
+		f = &ctx->src_fmt;
 	else
-		f = &ctx->decoded_fmt;
+		f = &ctx->dst_fmt;
 
 	for (i = 0; i < f->fmt.pix_mp.num_planes; ++i) {
 		u32 sizeimage = f->fmt.pix_mp.plane_fmt[i].sizeimage;
@@ -549,13 +549,13 @@ static void rkvpu_buf_request_complete(struct vb2_buffer *vb)
 static int rkvpu_start_streaming(struct vb2_queue *q, unsigned int count)
 {
 	struct rkvpu_ctx *ctx = vb2_get_drv_priv(q);
-	const struct rkvpu_coded_fmt_desc *desc;
+	const struct rkvpu_fmt_desc *desc;
 	int ret;
 
 	if (V4L2_TYPE_IS_CAPTURE(q->type))
 		return 0;
 
-	desc = ctx->coded_fmt_desc;
+	desc = ctx->src_fmt_desc;
 	if (WARN_ON(!desc))
 		return -EINVAL;
 
@@ -594,7 +594,7 @@ static void rkvpu_stop_streaming(struct vb2_queue *q)
 	struct rkvpu_ctx *ctx = vb2_get_drv_priv(q);
 
 	if (V4L2_TYPE_IS_OUTPUT(q->type)) {
-		const struct rkvpu_coded_fmt_desc *desc = ctx->coded_fmt_desc;
+		const struct rkvpu_fmt_desc *desc = ctx->src_fmt_desc;
 
 		if (WARN_ON(!desc))
 			return;
@@ -639,12 +639,12 @@ static const struct media_device_ops rkvpu_media_ops = {
 static void rkvpu_job_finish_no_pm(struct rkvpu_ctx *ctx,
 				    enum vb2_buffer_state result)
 {
-	if (ctx->coded_fmt_desc->ops->done) {
+	if (ctx->src_fmt_desc->ops->done) {
 		struct vb2_v4l2_buffer *src_buf, *dst_buf;
 
 		src_buf = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
 		dst_buf = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
-		ctx->coded_fmt_desc->ops->done(ctx, src_buf, dst_buf, result);
+		ctx->src_fmt_desc->ops->done(ctx, src_buf, dst_buf, result);
 	}
 
 	v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx,
@@ -690,7 +690,7 @@ static void rkvpu_device_run(void *priv)
 {
 	struct rkvpu_ctx *ctx = priv;
 	struct rkvpu_dev *rkvpu = ctx->dev;
-	const struct rkvpu_coded_fmt_desc *desc = ctx->coded_fmt_desc;
+	const struct rkvpu_fmt_desc *desc = ctx->src_fmt_desc;
 	int ret;
 
 	if (WARN_ON(!desc))
@@ -751,7 +751,7 @@ static int rkvpu_queue_init(void *priv,
 	dst_vq->io_modes = VB2_MMAP | VB2_DMABUF;
 	dst_vq->drv_priv = ctx;
 	dst_vq->ops = &rkvpu_queue_ops;
-	dst_vq->buf_struct_size = sizeof(struct rkvpu_decoded_buffer);
+	dst_vq->buf_struct_size = sizeof(struct rkvpu_src_buffer);
 	dst_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
 	dst_vq->lock = &rkvpu->vdev_lock;
 	dst_vq->dev = rkvpu->v4l2_dev.dev;
@@ -780,13 +780,13 @@ static int rkvpu_init_ctrls(struct rkvpu_ctx *ctx)
 	unsigned int i, nctrls = 0;
 	int ret;
 
-	for (i = 0; i < ARRAY_SIZE(rkvpu_coded_fmts); i++)
-		nctrls += rkvpu_coded_fmts[i].ctrls->num_ctrls;
+	for (i = 0; i < ARRAY_SIZE(rkvpu_src_fmts); i++)
+		nctrls += rkvpu_src_fmts[i].ctrls->num_ctrls;
 
 	v4l2_ctrl_handler_init(&ctx->ctrl_hdl, nctrls);
 
-	for (i = 0; i < ARRAY_SIZE(rkvpu_coded_fmts); i++) {
-		ret = rkvpu_add_ctrls(ctx, rkvpu_coded_fmts[i].ctrls);
+	for (i = 0; i < ARRAY_SIZE(rkvpu_src_fmts); i++) {
+		ret = rkvpu_add_ctrls(ctx, rkvpu_src_fmts[i].ctrls);
 		if (ret)
 			goto err_free_handler;
 	}
@@ -814,8 +814,8 @@ static int rkvpu_open(struct file *filp)
 		return -ENOMEM;
 
 	ctx->dev = rkvpu;
-	rkvpu_reset_coded_fmt(ctx);
-	rkvpu_reset_decoded_fmt(ctx);
+	rkvpu_reset_src_fmt(ctx);
+	rkvpu_reset_dst_fmt(ctx);
 	v4l2_fh_init(&ctx->fh, video_devdata(filp));
 
 	ret = rkvpu_init_ctrls(ctx);

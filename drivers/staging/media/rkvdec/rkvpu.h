@@ -40,30 +40,30 @@ struct rkvpu_run {
 	} bufs;
 };
 
-struct rkvpu_vp9_decoded_buffer_info {
-	/* Info needed when the decoded frame serves as a reference frame. */
+struct rkvpu_vp9_src_buffer_info {
+	/* Info needed when the src frame serves as a reference frame. */
 	unsigned short width;
 	unsigned short height;
 	unsigned int bit_depth : 4;
 };
 
-struct rkvpu_decoded_buffer {
+struct rkvpu_src_buffer {
 	/* Must be the first field in this struct. */
 	struct v4l2_m2m_buffer base;
 
 	union {
-		struct rkvpu_vp9_decoded_buffer_info vp9;
+		struct rkvpu_vp9_src_buffer_info vp9;
 	};
 };
 
-static inline struct rkvpu_decoded_buffer *
-vb2_to_rkvpu_decoded_buf(struct vb2_buffer *buf)
+static inline struct rkvpu_src_buffer *
+vb2_to_rkvpu_src_buf(struct vb2_buffer *buf)
 {
-	return container_of(buf, struct rkvpu_decoded_buffer,
+	return container_of(buf, struct rkvpu_src_buffer,
 			    base.vb.vb2_buf);
 }
 
-struct rkvpu_coded_fmt_ops {
+struct rkvpu_ops {
 	int (*adjust_fmt)(struct rkvpu_ctx *ctx,
 			  struct v4l2_format *f);
 	int (*start)(struct rkvpu_ctx *ctx);
@@ -75,13 +75,13 @@ struct rkvpu_coded_fmt_ops {
 	int (*try_ctrl)(struct rkvpu_ctx *ctx, struct v4l2_ctrl *ctrl);
 };
 
-struct rkvpu_coded_fmt_desc {
+struct rkvpu_fmt_desc {
 	u32 fourcc;
 	struct v4l2_frmsize_stepwise frmsize;
 	const struct rkvpu_ctrls *ctrls;
-	const struct rkvpu_coded_fmt_ops *ops;
-	unsigned int num_decoded_fmts;
-	const u32 *decoded_fmts;
+	const struct rkvpu_ops *ops;
+	unsigned int num_dst_fmts;
+	const u32 *dst_fmts;
 	u32 subsystem_flags;
 };
 
@@ -99,9 +99,9 @@ struct rkvpu_dev {
 
 struct rkvpu_ctx {
 	struct v4l2_fh fh;
-	struct v4l2_format coded_fmt;
-	struct v4l2_format decoded_fmt;
-	const struct rkvpu_coded_fmt_desc *coded_fmt_desc;
+	struct v4l2_format src_fmt;
+	struct v4l2_format dst_fmt;
+	const struct rkvpu_fmt_desc *src_fmt_desc;
 	struct v4l2_ctrl_handler ctrl_hdl;
 	struct rkvpu_dev *dev;
 	void *priv;
@@ -121,7 +121,7 @@ struct rkvpu_aux_buf {
 void rkvpu_run_preamble(struct rkvpu_ctx *ctx, struct rkvpu_run *run);
 void rkvpu_run_postamble(struct rkvpu_ctx *ctx, struct rkvpu_run *run);
 
-extern const struct rkvpu_coded_fmt_ops rkvdec_h264_fmt_ops;
-extern const struct rkvpu_coded_fmt_ops rkvdec_vp9_fmt_ops;
+extern const struct rkvpu_ops rkvdec_h264_fmt_ops;
+extern const struct rkvpu_ops rkvdec_vp9_fmt_ops;
 
 #endif /* RKVDEC_H_ */

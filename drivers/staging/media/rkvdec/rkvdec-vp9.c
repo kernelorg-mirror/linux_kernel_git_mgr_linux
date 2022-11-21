@@ -380,8 +380,8 @@ static struct rkvdec_vp9_ref_reg ref_regs[] = {
 	}
 };
 
-static struct rkvpu_decoded_buffer *
-get_ref_buf(struct rkvdec_ctx *ctx, struct vb2_v4l2_buffer *dst, u64 timestamp)
+static struct rkvpu_src_buffer *
+get_ref_buf(struct rkvpu_ctx *ctx, struct vb2_v4l2_buffer *dst, u64 timestamp)
 {
 	struct v4l2_m2m_ctx *m2m_ctx = ctx->fh.m2m_ctx;
 	struct vb2_queue *cap_q = &m2m_ctx->cap_q_ctx.q;
@@ -395,10 +395,10 @@ get_ref_buf(struct rkvdec_ctx *ctx, struct vb2_v4l2_buffer *dst, u64 timestamp)
 	if (!buf)
 		buf = &dst->vb2_buf;
 
-	return vb2_to_rkvpu_decoded_buf(buf);
+	return vb2_to_rkvpu_src_buf(buf);
 }
 
-static dma_addr_t get_mv_base_addr(struct rkvdec_decoded_buffer *buf)
+static dma_addr_t get_mv_base_addr(struct rkvpu_src_buffer *buf)
 {
 	unsigned int aligned_pitch, aligned_height, yuv_len;
 
@@ -412,7 +412,7 @@ static dma_addr_t get_mv_base_addr(struct rkvdec_decoded_buffer *buf)
 
 static void config_ref_registers(struct rkvpu_ctx *ctx,
 				 const struct rkvdec_vp9_run *run,
-				 struct rkvpu_decoded_buffer *ref_buf,
+				 struct rkvpu_src_buffer *ref_buf,
 				 struct rkvdec_vp9_ref_reg *ref_reg)
 {
 	unsigned int aligned_pitch, aligned_height, y_len, yuv_len;
@@ -488,7 +488,7 @@ static void config_seg_registers(struct rkvpu_ctx *ctx, unsigned int segid)
 	writel_relaxed(val, rkvpu->regs + RKVDEC_VP9_SEGID_GRP(segid));
 }
 
-static void update_dec_buf_info(struct rkvpu_decoded_buffer *buf,
+static void update_dec_buf_info(struct rkvpu_src_buffer *buf,
 				const struct v4l2_ctrl_vp9_frame *dec_params)
 {
 	buf->vp9.width = dec_params->frame_width_minus_1 + 1;
@@ -497,7 +497,7 @@ static void update_dec_buf_info(struct rkvpu_decoded_buffer *buf,
 }
 
 static void update_ctx_cur_info(struct rkvdec_vp9_ctx *vp9_ctx,
-				struct rkvpu_decoded_buffer *buf,
+				struct rkvpu_src_buffer *buf,
 				const struct v4l2_ctrl_vp9_frame *dec_params)
 {
 	vp9_ctx->cur.valid = true;
@@ -519,8 +519,8 @@ static void config_registers(struct rkvpu_ctx *ctx,
 {
 	unsigned int y_len, uv_len, yuv_len, bit_depth, aligned_height, aligned_pitch, stream_len;
 	const struct v4l2_ctrl_vp9_frame *dec_params;
-	struct rkvpu_decoded_buffer *ref_bufs[3];
-	struct rkvpu_decoded_buffer *dst, *last, *mv_ref;
+	struct rkvpu_src_buffer *ref_bufs[3];
+	struct rkvpu_src_buffer *dst, *last, *mv_ref;
 	struct rkvdec_vp9_ctx *vp9_ctx = ctx->priv;
 	u32 val, last_frame_info = 0;
 	const struct v4l2_vp9_segmentation *seg;
@@ -530,7 +530,7 @@ static void config_registers(struct rkvpu_ctx *ctx,
 	unsigned int i;
 
 	dec_params = run->decode_params;
-	dst = vb2_to_rkvpu_decoded_buf(&run->base.bufs.dst->vb2_buf);
+	dst = vb2_to_rkvpu_src_buf(&run->base.bufs.dst->vb2_buf);
 	ref_bufs[0] = get_ref_buf(ctx, &dst->base.vb, dec_params->last_frame_ts);
 	ref_bufs[1] = get_ref_buf(ctx, &dst->base.vb, dec_params->golden_frame_ts);
 	ref_bufs[2] = get_ref_buf(ctx, &dst->base.vb, dec_params->alt_frame_ts);
@@ -552,9 +552,9 @@ static void config_registers(struct rkvpu_ctx *ctx,
 		       rkvpu->regs + RKVDEC_REG_SYSCTRL);
 
 	bit_depth = dec_params->bit_depth;
-	aligned_height = round_up(ctx->decoded_fmt.fmt.pix_mp.height, 64);
+	aligned_height = round_up(ctx->dst_fmt.fmt.pix_mp.height, 64);
 
-	aligned_pitch = round_up(ctx->decoded_fmt.fmt.pix_mp.width *
+	aligned_pitch = round_up(ctx->dst_fmt.fmt.pix_mp.width *
 				 bit_depth,
 				 512) / 8;
 	y_len = aligned_height * aligned_pitch;
@@ -689,8 +689,8 @@ static void config_registers(struct rkvpu_ctx *ctx,
 	writel_relaxed(get_mv_base_addr(mv_ref),
 		       rkvpu->regs + RKVDEC_VP9_REF_COLMV_BASE);
 
-	writel_relaxed(ctx->decoded_fmt.fmt.pix_mp.width |
-		       (ctx->decoded_fmt.fmt.pix_mp.height << 16),
+	writel_relaxed(ctx->dst_fmt.fmt.pix_mp.width |
+		       (ctx->dst_fmt.fmt.pix_mp.height << 16),
 		       rkvpu->regs + RKVDEC_REG_PERFORMANCE_CYCLE);
 }
 
@@ -710,11 +710,11 @@ static int validate_dec_params(struct rkvpu_ctx *ctx,
 	aligned_height = round_up(dec_params->frame_height_minus_1 + 1, 64);
 
 	/*
-	 * Userspace should update the capture/decoded format when the
+	 * Userspace should update the capture/src format when the
 	 * resolution changes.
 	 */
-	if (aligned_width != ctx->decoded_fmt.fmt.pix_mp.width ||
-	    aligned_height != ctx->decoded_fmt.fmt.pix_mp.height) {
+	if (aligned_width != ctx->dst_fmt.fmt.pix_mp.width ||
+	    aligned_height != ctx->dst_fmt.fmt.pix_mp.height) {
 		dev_err(ctx->dev->dev,
 			"unexpected bitstream resolution %dx%d\n",
 			dec_params->frame_width_minus_1 + 1,
@@ -1064,7 +1064,7 @@ static int rkvdec_vp9_adjust_fmt(struct rkvpu_ctx *ctx,
 	return 0;
 }
 
-const struct rkvpu_coded_fmt_ops rkvdec_vp9_fmt_ops = {
+const struct rkvpu_ops rkvdec_vp9_fmt_ops = {
 	.adjust_fmt = rkvdec_vp9_adjust_fmt,
 	.start = rkvdec_vp9_start,
 	.stop = rkvdec_vp9_stop,
