@@ -12,7 +12,7 @@
 #include <media/v4l2-h264.h>
 #include <media/v4l2-mem2mem.h>
 
-#include "rkvdec.h"
+#include "rkvpu.h"
 #include "rkvdec-regs.h"
 
 /* Size with u32 units. */
@@ -104,7 +104,7 @@ struct rkvdec_h264_reflists {
 };
 
 struct rkvdec_h264_run {
-	struct rkvdec_run base;
+	struct rkvpu_run base;
 	const struct v4l2_ctrl_h264_decode_params *decode_params;
 	const struct v4l2_ctrl_h264_sps *sps;
 	const struct v4l2_ctrl_h264_pps *pps;
@@ -113,7 +113,7 @@ struct rkvdec_h264_run {
 };
 
 struct rkvdec_h264_ctx {
-	struct rkvdec_aux_buf priv_tbl;
+	struct rkvpu_aux_buf priv_tbl;
 	struct rkvdec_h264_reflists reflists;
 };
 
@@ -630,7 +630,7 @@ static void set_ps_field(u32 *buf, struct rkvdec_ps_field field, u32 value)
 	}
 }
 
-static void assemble_hw_pps(struct rkvdec_ctx *ctx,
+static void assemble_hw_pps(struct rkvpu_ctx *ctx,
 			    struct rkvdec_h264_run *run)
 {
 	struct rkvdec_h264_ctx *h264_ctx = ctx->priv;
@@ -732,7 +732,7 @@ static void assemble_hw_pps(struct rkvdec_ctx *ctx,
 	}
 }
 
-static void lookup_ref_buf_idx(struct rkvdec_ctx *ctx,
+static void lookup_ref_buf_idx(struct rkvpu_ctx *ctx,
 			       struct rkvdec_h264_run *run)
 {
 	const struct v4l2_ctrl_h264_decode_params *dec_params = run->decode_params;
@@ -755,7 +755,7 @@ static void lookup_ref_buf_idx(struct rkvdec_ctx *ctx,
 	}
 }
 
-static void assemble_hw_rps(struct rkvdec_ctx *ctx,
+static void assemble_hw_rps(struct rkvpu_ctx *ctx,
 			    struct v4l2_h264_reflist_builder *builder,
 			    struct rkvdec_h264_run *run)
 {
@@ -814,7 +814,7 @@ static void assemble_hw_rps(struct rkvdec_ctx *ctx,
 	}
 }
 
-static void assemble_hw_scaling_list(struct rkvdec_ctx *ctx,
+static void assemble_hw_scaling_list(struct rkvpu_ctx *ctx,
 				     struct rkvdec_h264_run *run)
 {
 	const struct v4l2_ctrl_h264_scaling_matrix *scaling = run->scaling_matrix;
@@ -880,10 +880,10 @@ static const u32 poc_reg_tbl_bottom_field[16] = {
 	RKVDEC_REG_H264_POC_REFER2(1)
 };
 
-static void config_registers(struct rkvdec_ctx *ctx,
+static void config_registers(struct rkvpu_ctx *ctx,
 			     struct rkvdec_h264_run *run)
 {
-	struct rkvdec_dev *rkvdec = ctx->dev;
+	struct rkvpu_dev *rkvpu = ctx->dev;
 	const struct v4l2_ctrl_h264_decode_params *dec_params = run->decode_params;
 	const struct v4l2_ctrl_h264_sps *sps = run->sps;
 	const struct v4l2_h264_dpb_entry *dpb = dec_params->dpb;
@@ -905,7 +905,7 @@ static void config_registers(struct rkvdec_ctx *ctx,
 	u32 reg, i;
 
 	reg = RKVDEC_MODE(RKVDEC_MODE_H264);
-	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_SYSCTRL);
+	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_SYSCTRL);
 
 	f = &ctx->decoded_fmt;
 	dst_fmt = &f->fmt.pix_mp;
@@ -924,31 +924,31 @@ static void config_registers(struct rkvdec_ctx *ctx,
 	      RKVDEC_UV_HOR_VIRSTRIDE(hor_virstride / 16) |
 	      RKVDEC_SLICE_NUM_HIGHBIT |
 	      RKVDEC_SLICE_NUM_LOWBITS(0x7ff);
-	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_PICPAR);
+	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_PICPAR);
 
 	/* config rlc base address */
 	rlc_addr = vb2_dma_contig_plane_dma_addr(&src_buf->vb2_buf, 0);
-	writel_relaxed(rlc_addr, rkvdec->regs + RKVDEC_REG_STRM_RLC_BASE);
-	writel_relaxed(rlc_addr, rkvdec->regs + RKVDEC_REG_RLCWRITE_BASE);
+	writel_relaxed(rlc_addr, rkvpu->regs + RKVDEC_REG_STRM_RLC_BASE);
+	writel_relaxed(rlc_addr, rkvpu->regs + RKVDEC_REG_RLCWRITE_BASE);
 
 	rlc_len = vb2_get_plane_payload(&src_buf->vb2_buf, 0);
 	reg = RKVDEC_STRM_LEN(rlc_len);
-	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_STRM_LEN);
+	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_STRM_LEN);
 
 	/* config cabac table */
 	offset = offsetof(struct rkvdec_h264_priv_tbl, cabac_table);
 	writel_relaxed(priv_start_addr + offset,
-		       rkvdec->regs + RKVDEC_REG_CABACTBL_PROB_BASE);
+		       rkvpu->regs + RKVDEC_REG_CABACTBL_PROB_BASE);
 
 	/* config output base address */
 	dst_addr = vb2_dma_contig_plane_dma_addr(&dst_buf->vb2_buf, 0);
-	writel_relaxed(dst_addr, rkvdec->regs + RKVDEC_REG_DECOUT_BASE);
+	writel_relaxed(dst_addr, rkvpu->regs + RKVDEC_REG_DECOUT_BASE);
 
 	reg = RKVDEC_Y_VIRSTRIDE(y_virstride / 16);
-	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_Y_VIRSTRIDE);
+	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_Y_VIRSTRIDE);
 
 	reg = RKVDEC_YUV_VIRSTRIDE(yuv_virstride / 16);
-	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_YUV_VIRSTRIDE);
+	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_YUV_VIRSTRIDE);
 
 	/* config ref pic address & poc */
 	for (i = 0; i < ARRAY_SIZE(dec_params->dpb); i++) {
@@ -973,48 +973,48 @@ static void config_registers(struct rkvdec_ctx *ctx,
 			refer_addr |= RKVDEC_BOTFIELD_USED_REF;
 
 		writel_relaxed(dpb[i].top_field_order_cnt,
-			       rkvdec->regs +  poc_reg_tbl_top_field[i]);
+			       rkvpu->regs +  poc_reg_tbl_top_field[i]);
 		writel_relaxed(dpb[i].bottom_field_order_cnt,
-			       rkvdec->regs + poc_reg_tbl_bottom_field[i]);
+			       rkvpu->regs + poc_reg_tbl_bottom_field[i]);
 
 		if (i < V4L2_H264_NUM_DPB_ENTRIES - 1)
 			writel_relaxed(refer_addr,
-				       rkvdec->regs + RKVDEC_REG_H264_BASE_REFER(i));
+				       rkvpu->regs + RKVDEC_REG_H264_BASE_REFER(i));
 		else
 			writel_relaxed(refer_addr,
-				       rkvdec->regs + RKVDEC_REG_H264_BASE_REFER15);
+				       rkvpu->regs + RKVDEC_REG_H264_BASE_REFER15);
 	}
 
 	reg = RKVDEC_CUR_POC(dec_params->top_field_order_cnt);
-	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_CUR_POC0);
+	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_CUR_POC0);
 
 	reg = RKVDEC_CUR_POC(dec_params->bottom_field_order_cnt);
-	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_CUR_POC1);
+	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_CUR_POC1);
 
 	/* config hw pps address */
 	offset = offsetof(struct rkvdec_h264_priv_tbl, param_set);
 	writel_relaxed(priv_start_addr + offset,
-		       rkvdec->regs + RKVDEC_REG_PPS_BASE);
+		       rkvpu->regs + RKVDEC_REG_PPS_BASE);
 
 	/* config hw rps address */
 	offset = offsetof(struct rkvdec_h264_priv_tbl, rps);
 	writel_relaxed(priv_start_addr + offset,
-		       rkvdec->regs + RKVDEC_REG_RPS_BASE);
+		       rkvpu->regs + RKVDEC_REG_RPS_BASE);
 
 	reg = RKVDEC_AXI_DDR_RDATA(0);
-	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_AXI_DDR_RDATA);
+	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_AXI_DDR_RDATA);
 
 	reg = RKVDEC_AXI_DDR_WDATA(0);
-	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_AXI_DDR_WDATA);
+	writel_relaxed(reg, rkvpu->regs + RKVDEC_REG_AXI_DDR_WDATA);
 
 	offset = offsetof(struct rkvdec_h264_priv_tbl, err_info);
 	writel_relaxed(priv_start_addr + offset,
-		       rkvdec->regs + RKVDEC_REG_H264_ERRINFO_BASE);
+		       rkvpu->regs + RKVDEC_REG_H264_ERRINFO_BASE);
 }
 
 #define RKVDEC_H264_MAX_DEPTH_IN_BYTES		2
 
-static int rkvdec_h264_adjust_fmt(struct rkvdec_ctx *ctx,
+static int rkvdec_h264_adjust_fmt(struct rkvpu_ctx *ctx,
 				  struct v4l2_format *f)
 {
 	struct v4l2_pix_format_mplane *fmt = &f->fmt.pix_mp;
@@ -1026,7 +1026,7 @@ static int rkvdec_h264_adjust_fmt(struct rkvdec_ctx *ctx,
 	return 0;
 }
 
-static int rkvdec_h264_validate_sps(struct rkvdec_ctx *ctx,
+static int rkvdec_h264_validate_sps(struct rkvpu_ctx *ctx,
 				    const struct v4l2_ctrl_h264_sps *sps)
 {
 	unsigned int width, height;
@@ -1064,9 +1064,9 @@ static int rkvdec_h264_validate_sps(struct rkvdec_ctx *ctx,
 	return 0;
 }
 
-static int rkvdec_h264_start(struct rkvdec_ctx *ctx)
+static int rkvdec_h264_start(struct rkvpu_ctx *ctx)
 {
-	struct rkvdec_dev *rkvdec = ctx->dev;
+	struct rkvpu_dev *rkvpu = ctx->dev;
 	struct rkvdec_h264_priv_tbl *priv_tbl;
 	struct rkvdec_h264_ctx *h264_ctx;
 	struct v4l2_ctrl *ctrl;
@@ -1085,7 +1085,7 @@ static int rkvdec_h264_start(struct rkvdec_ctx *ctx)
 	if (!h264_ctx)
 		return -ENOMEM;
 
-	priv_tbl = dma_alloc_coherent(rkvdec->dev, sizeof(*priv_tbl),
+	priv_tbl = dma_alloc_coherent(rkvpu->dev, sizeof(*priv_tbl),
 				      &h264_ctx->priv_tbl.dma, GFP_KERNEL);
 	if (!priv_tbl) {
 		ret = -ENOMEM;
@@ -1105,17 +1105,17 @@ err_free_ctx:
 	return ret;
 }
 
-static void rkvdec_h264_stop(struct rkvdec_ctx *ctx)
+static void rkvdec_h264_stop(struct rkvpu_ctx *ctx)
 {
 	struct rkvdec_h264_ctx *h264_ctx = ctx->priv;
-	struct rkvdec_dev *rkvdec = ctx->dev;
+	struct rkvpu_dev *rkvpu = ctx->dev;
 
-	dma_free_coherent(rkvdec->dev, h264_ctx->priv_tbl.size,
+	dma_free_coherent(rkvpu->dev, h264_ctx->priv_tbl.size,
 			  h264_ctx->priv_tbl.cpu, h264_ctx->priv_tbl.dma);
 	kfree(h264_ctx);
 }
 
-static void rkvdec_h264_run_preamble(struct rkvdec_ctx *ctx,
+static void rkvdec_h264_run_preamble(struct rkvpu_ctx *ctx,
 				     struct rkvdec_h264_run *run)
 {
 	struct v4l2_ctrl *ctrl;
@@ -1133,13 +1133,13 @@ static void rkvdec_h264_run_preamble(struct rkvdec_ctx *ctx,
 			      V4L2_CID_STATELESS_H264_SCALING_MATRIX);
 	run->scaling_matrix = ctrl ? ctrl->p_cur.p : NULL;
 
-	rkvdec_run_preamble(ctx, &run->base);
+	rkvpu_run_preamble(ctx, &run->base);
 }
 
-static int rkvdec_h264_run(struct rkvdec_ctx *ctx)
+static int rkvdec_h264_run(struct rkvpu_ctx *ctx)
 {
 	struct v4l2_h264_reflist_builder reflist_builder;
-	struct rkvdec_dev *rkvdec = ctx->dev;
+	struct rkvpu_dev *rkvpu = ctx->dev;
 	struct rkvdec_h264_ctx *h264_ctx = ctx->priv;
 	struct rkvdec_h264_run run;
 
@@ -1158,24 +1158,24 @@ static int rkvdec_h264_run(struct rkvdec_ctx *ctx)
 	assemble_hw_rps(ctx, &reflist_builder, &run);
 	config_registers(ctx, &run);
 
-	rkvdec_run_postamble(ctx, &run.base);
+	rkvpu_run_postamble(ctx, &run.base);
 
-	schedule_delayed_work(&rkvdec->watchdog_work, msecs_to_jiffies(2000));
+	schedule_delayed_work(&rkvpu->watchdog_work, msecs_to_jiffies(2000));
 
-	writel(0, rkvdec->regs + RKVDEC_REG_STRMD_ERR_EN);
-	writel(0, rkvdec->regs + RKVDEC_REG_H264_ERR_E);
-	writel(1, rkvdec->regs + RKVDEC_REG_PREF_LUMA_CACHE_COMMAND);
-	writel(1, rkvdec->regs + RKVDEC_REG_PREF_CHR_CACHE_COMMAND);
+	writel(0, rkvpu->regs + RKVDEC_REG_STRMD_ERR_EN);
+	writel(0, rkvpu->regs + RKVDEC_REG_H264_ERR_E);
+	writel(1, rkvpu->regs + RKVDEC_REG_PREF_LUMA_CACHE_COMMAND);
+	writel(1, rkvpu->regs + RKVDEC_REG_PREF_CHR_CACHE_COMMAND);
 
 	/* Start decoding! */
 	writel(RKVDEC_INTERRUPT_DEC_E | RKVDEC_CONFIG_DEC_CLK_GATE_E |
 	       RKVDEC_TIMEOUT_E | RKVDEC_BUF_EMPTY_E,
-	       rkvdec->regs + RKVDEC_REG_INTERRUPT);
+	       rkvpu->regs + RKVDEC_REG_INTERRUPT);
 
 	return 0;
 }
 
-static int rkvdec_h264_try_ctrl(struct rkvdec_ctx *ctx, struct v4l2_ctrl *ctrl)
+static int rkvdec_h264_try_ctrl(struct rkvpu_ctx *ctx, struct v4l2_ctrl *ctrl)
 {
 	if (ctrl->id == V4L2_CID_STATELESS_H264_SPS)
 		return rkvdec_h264_validate_sps(ctx, ctrl->p_new.p_h264_sps);
@@ -1183,7 +1183,7 @@ static int rkvdec_h264_try_ctrl(struct rkvdec_ctx *ctx, struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-const struct rkvdec_coded_fmt_ops rkvdec_h264_fmt_ops = {
+const struct rkvpu_coded_fmt_ops rkvdec_h264_fmt_ops = {
 	.adjust_fmt = rkvdec_h264_adjust_fmt,
 	.start = rkvdec_h264_start,
 	.stop = rkvdec_h264_stop,

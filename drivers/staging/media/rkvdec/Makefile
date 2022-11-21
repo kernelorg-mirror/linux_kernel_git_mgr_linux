@@ -1,3 +1,3 @@
-obj-$(CONFIG_VIDEO_ROCKCHIP_VDEC) += rockchip-vdec.o
+obj-$(CONFIG_VIDEO_ROCKCHIP_VDEC) += rockchip-vpu.o
 
-rockchip-vdec-y += rkvdec.o rkvdec-h264.o rkvdec-vp9.o
+rockchip-vpu-y += rkvpu.o rkvdec-h264.o rkvdec-vp9.o
