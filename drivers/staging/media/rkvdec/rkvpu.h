@@ -72,6 +72,8 @@ struct rkvpu_ops {
 	void (*done)(struct rkvpu_ctx *ctx, struct vb2_v4l2_buffer *src_buf,
 		     struct vb2_v4l2_buffer *dst_buf,
 		     enum vb2_buffer_state result);
+	int (*irq)(struct rkvpu_ctx *ctx);
+	int (*watchdog)(struct rkvpu_ctx *ctx);
 	int (*try_ctrl)(struct rkvpu_ctx *ctx, struct v4l2_ctrl *ctrl);
 };
 
@@ -101,7 +103,7 @@ struct rkvpu_ctx {
 	struct v4l2_fh fh;
 	struct v4l2_format src_fmt;
 	struct v4l2_format dst_fmt;
-	const struct rkvpu_fmt_desc *src_fmt_desc;
+	const struct rkvpu_fmt_desc *fmt_desc;
 	struct v4l2_ctrl_handler ctrl_hdl;
 	struct rkvpu_dev *dev;
 	void *priv;

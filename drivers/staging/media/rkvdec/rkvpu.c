@@ -25,12 +25,11 @@
 #include <media/videobuf2-vmalloc.h>
 
 #include "rkvpu.h"
-#include "rkvpu-regs.h"
 
 static int rkvpu_try_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct rkvpu_ctx *ctx = container_of(ctrl->handler, struct rkvpu_ctx, ctrl_hdl);
-	const struct rkvpu_fmt_desc *desc = ctx->src_fmt_desc;
+	const struct rkvpu_fmt_desc *desc = ctx->fmt_desc;
 
 	if (desc->ops->try_ctrl)
 		return desc->ops->try_ctrl(ctx, ctrl);
@@ -112,7 +111,7 @@ static const struct rkvpu_ctrls rkvdec_vp9_ctrls = {
 	.num_ctrls = ARRAY_SIZE(rkvdec_vp9_ctrl_descs),
 };
 
-static const struct rkvpu_fmt_desc rkvpu_src_fmts[] = {
+static const struct rkvpu_fmt_desc rkvpu_fmts[] = {
 	{
 		.fourcc = V4L2_PIX_FMT_H264_SLICE,
 		.frmsize = {
@@ -147,13 +146,13 @@ static const struct rkvpu_fmt_desc rkvpu_src_fmts[] = {
 };
 
 static const struct rkvpu_fmt_desc *
-rkvpu_find_src_fmt_desc(u32 fourcc)
+rkvpu_find_fmt_desc(u32 fourcc)
 {
 	unsigned int i;
 
-	for (i = 0; i < ARRAY_SIZE(rkvpu_src_fmts); i++) {
-		if (rkvpu_src_fmts[i].fourcc == fourcc)
-			return &rkvpu_src_fmts[i];
+	for (i = 0; i < ARRAY_SIZE(rkvpu_fmts); i++) {
+		if (rkvpu_fmts[i].fourcc == fourcc)
+			return &rkvpu_fmts[i];
 	}
 
 	return NULL;
@@ -175,25 +174,25 @@ static void rkvpu_reset_src_fmt(struct rkvpu_ctx *ctx)
 {
 	struct v4l2_format *f = &ctx->src_fmt;
 
-	ctx->src_fmt_desc = &rkvpu_src_fmts[0];
-	rkvpu_reset_fmt(ctx, f, ctx->src_fmt_desc->fourcc);
+	ctx->fmt_desc = &rkvpu_fmts[0];
+	rkvpu_reset_fmt(ctx, f, ctx->fmt_desc->fourcc);
 
 	f->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	f->fmt.pix_mp.width = ctx->src_fmt_desc->frmsize.min_width;
-	f->fmt.pix_mp.height = ctx->src_fmt_desc->frmsize.min_height;
+	f->fmt.pix_mp.width = ctx->fmt_desc->frmsize.min_width;
+	f->fmt.pix_mp.height = ctx->fmt_desc->frmsize.min_height;
 
-	if (ctx->src_fmt_desc->ops->adjust_fmt)
-		ctx->src_fmt_desc->ops->adjust_fmt(ctx, f);
+	if (ctx->fmt_desc->ops->adjust_fmt)
+		ctx->fmt_desc->ops->adjust_fmt(ctx, f);
 }
 
 static void rkvpu_reset_dst_fmt(struct rkvpu_ctx *ctx)
 {
 	struct v4l2_format *f = &ctx->dst_fmt;
 
-	rkvpu_reset_fmt(ctx, f, ctx->src_fmt_desc->dst_fmts[0]);
+	rkvpu_reset_fmt(ctx, f, ctx->fmt_desc->dst_fmts[0]);
 	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	v4l2_fill_pixfmt_mp(&f->fmt.pix_mp,
-			    ctx->src_fmt_desc->dst_fmts[0],
+			    ctx->fmt_desc->dst_fmts[0],
 			    ctx->src_fmt.fmt.pix_mp.width,
 			    ctx->src_fmt.fmt.pix_mp.height);
 	f->fmt.pix_mp.plane_fmt[0].sizeimage += 128 *
@@ -209,7 +208,7 @@ static int rkvpu_enum_framesizes(struct file *file, void *priv,
 	if (fsize->index != 0)
 		return -EINVAL;
 
-	fmt = rkvpu_find_src_fmt_desc(fsize->pixel_format);
+	fmt = rkvpu_find_fmt_desc(fsize->pixel_format);
 	if (!fmt)
 		return -EINVAL;
 
@@ -245,7 +244,7 @@ static int rkvpu_try_capture_fmt(struct file *file, void *priv,
 	 * on the src end has not been set yet, it should point to the
 	 * default value.
 	 */
-	src_desc = ctx->src_fmt_desc;
+	src_desc = ctx->fmt_desc;
 	if (WARN_ON(!src_desc))
 		return -EINVAL;
 
@@ -282,10 +281,10 @@ static int rkvpu_try_output_fmt(struct file *file, void *priv,
 	struct rkvpu_ctx *ctx = fh_to_rkvpu_ctx(priv);
 	const struct rkvpu_fmt_desc *desc;
 
-	desc = rkvpu_find_src_fmt_desc(pix_mp->pixelformat);
+	desc = rkvpu_find_fmt_desc(pix_mp->pixelformat);
 	if (!desc) {
-		pix_mp->pixelformat = rkvpu_src_fmts[0].fourcc;
-		desc = &rkvpu_src_fmts[0];
+		pix_mp->pixelformat = rkvpu_fmts[0].fourcc;
+		desc = &rkvpu_fmts[0];
 	}
 
 	v4l2_apply_frmsize_constraints(&pix_mp->width,
@@ -362,10 +361,10 @@ static int rkvpu_s_output_fmt(struct file *file, void *priv,
 	if (ret)
 		return ret;
 
-	desc = rkvpu_find_src_fmt_desc(f->fmt.pix_mp.pixelformat);
+	desc = rkvpu_find_fmt_desc(f->fmt.pix_mp.pixelformat);
 	if (!desc)
 		return -EINVAL;
-	ctx->src_fmt_desc = desc;
+	ctx->fmt_desc = desc;
 	ctx->src_fmt = *f;
 
 	/*
@@ -413,10 +412,10 @@ static int rkvpu_g_capture_fmt(struct file *file, void *priv,
 static int rkvpu_enum_output_fmt(struct file *file, void *priv,
 				  struct v4l2_fmtdesc *f)
 {
-	if (f->index >= ARRAY_SIZE(rkvpu_src_fmts))
+	if (f->index >= ARRAY_SIZE(rkvpu_fmts))
 		return -EINVAL;
 
-	f->pixelformat = rkvpu_src_fmts[f->index].fourcc;
+	f->pixelformat = rkvpu_fmts[f->index].fourcc;
 	return 0;
 }
 
@@ -425,13 +424,13 @@ static int rkvpu_enum_capture_fmt(struct file *file, void *priv,
 {
 	struct rkvpu_ctx *ctx = fh_to_rkvpu_ctx(priv);
 
-	if (WARN_ON(!ctx->src_fmt_desc))
+	if (WARN_ON(!ctx->fmt_desc))
 		return -EINVAL;
 
-	if (f->index >= ctx->src_fmt_desc->num_dst_fmts)
+	if (f->index >= ctx->fmt_desc->num_dst_fmts)
 		return -EINVAL;
 
-	f->pixelformat = ctx->src_fmt_desc->dst_fmts[f->index];
+	f->pixelformat = ctx->fmt_desc->dst_fmts[f->index];
 	return 0;
 }
 
@@ -555,7 +554,7 @@ static int rkvpu_start_streaming(struct vb2_queue *q, unsigned int count)
 	if (V4L2_TYPE_IS_CAPTURE(q->type))
 		return 0;
 
-	desc = ctx->src_fmt_desc;
+	desc = ctx->fmt_desc;
 	if (WARN_ON(!desc))
 		return -EINVAL;
 
@@ -594,7 +593,7 @@ static void rkvpu_stop_streaming(struct vb2_queue *q)
 	struct rkvpu_ctx *ctx = vb2_get_drv_priv(q);
 
 	if (V4L2_TYPE_IS_OUTPUT(q->type)) {
-		const struct rkvpu_fmt_desc *desc = ctx->src_fmt_desc;
+		const struct rkvpu_fmt_desc *desc = ctx->fmt_desc;
 
 		if (WARN_ON(!desc))
 			return;
@@ -639,12 +638,12 @@ static const struct media_device_ops rkvpu_media_ops = {
 static void rkvpu_job_finish_no_pm(struct rkvpu_ctx *ctx,
 				    enum vb2_buffer_state result)
 {
-	if (ctx->src_fmt_desc->ops->done) {
+	if (ctx->fmt_desc->ops->done) {
 		struct vb2_v4l2_buffer *src_buf, *dst_buf;
 
 		src_buf = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
 		dst_buf = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
-		ctx->src_fmt_desc->ops->done(ctx, src_buf, dst_buf, result);
+		ctx->fmt_desc->ops->done(ctx, src_buf, dst_buf, result);
 	}
 
 	v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx,
@@ -690,7 +689,7 @@ static void rkvpu_device_run(void *priv)
 {
 	struct rkvpu_ctx *ctx = priv;
 	struct rkvpu_dev *rkvpu = ctx->dev;
-	const struct rkvpu_fmt_desc *desc = ctx->src_fmt_desc;
+	const struct rkvpu_fmt_desc *desc = ctx->fmt_desc;
 	int ret;
 
 	if (WARN_ON(!desc))
@@ -780,13 +779,13 @@ static int rkvpu_init_ctrls(struct rkvpu_ctx *ctx)
 	unsigned int i, nctrls = 0;
 	int ret;
 
-	for (i = 0; i < ARRAY_SIZE(rkvpu_src_fmts); i++)
-		nctrls += rkvpu_src_fmts[i].ctrls->num_ctrls;
+	for (i = 0; i < ARRAY_SIZE(rkvpu_fmts); i++)
+		nctrls += rkvpu_fmts[i].ctrls->num_ctrls;
 
 	v4l2_ctrl_handler_init(&ctx->ctrl_hdl, nctrls);
 
-	for (i = 0; i < ARRAY_SIZE(rkvpu_src_fmts); i++) {
-		ret = rkvpu_add_ctrls(ctx, rkvpu_src_fmts[i].ctrls);
+	for (i = 0; i < ARRAY_SIZE(rkvpu_fmts); i++) {
+		ret = rkvpu_add_ctrls(ctx, rkvpu_fmts[i].ctrls);
 		if (ret)
 			goto err_free_handler;
 	}
@@ -950,14 +949,16 @@ static void rkvpu_v4l2_cleanup(struct rkvpu_dev *rkvpu)
 static irqreturn_t rkvpu_irq_handler(int irq, void *priv)
 {
 	struct rkvpu_dev *rkvpu = priv;
-	enum vb2_buffer_state state;
-	u32 status;
+	struct rkvpu_ctx *ctx = v4l2_m2m_get_curr_priv(rkvpu->m2m_dev);
+	const struct rkvpu_desc *desc = ctx->fmt_desc;
+	enum vb2_buffer_state state = VB2_BUF_STATE_ERROR;
 
-	status = readl(rkvpu->regs + RKVDEC_REG_INTERRUPT);
-	state = (status & RKVDEC_RDY_STA) ?
-		VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
+	if (WARN_ON(!desc))
+		return IRQ_HANDLED;
 
-	writel(0, rkvpu->regs + RKVDEC_REG_INTERRUPT);
+	if (desc->ops->irq)
+		state = desc->ops->irq(ctx);
+
 	if (cancel_delayed_work(&rkvpu->watchdog_work)) {
 		struct rkvpu_ctx *ctx;
 
@@ -970,18 +971,20 @@ static irqreturn_t rkvpu_irq_handler(int irq, void *priv)
 
 static void rkvpu_watchdog_func(struct work_struct *work)
 {
-	struct rkvpu_dev *rkvpu;
-	struct rkvpu_ctx *ctx;
+	struct rkvpu_dev *rkvpu = container_of(to_delayed_work(work),
+				struct rkvpu_dev, watchdog_work);
+	struct rkvpu_ctx *ctx = v4l2_m2m_get_curr_priv(rkvpu->m2m_dev);
+	const struct rkvpu_desc *desc = ctx->fmt_desc;
 
-	rkvpu = container_of(to_delayed_work(work), struct rkvpu_dev,
-			      watchdog_work);
-	ctx = v4l2_m2m_get_curr_priv(rkvpu->m2m_dev);
-	if (ctx) {
-		dev_err(rkvpu->dev, "Frame processing timed out!\n");
-		writel(RKVDEC_IRQ_DIS, rkvpu->regs + RKVDEC_REG_INTERRUPT);
-		writel(0, rkvpu->regs + RKVDEC_REG_SYSCTRL);
-		rkvpu_job_finish(ctx, VB2_BUF_STATE_ERROR);
-	}
+	dev_err(rkvpu->dev, "Frame processing timed out!\n");
+
+	if (WARN_ON(!desc))
+		return;
+
+	if (desc->ops->watchdog)
+		desc->ops->watchdog(ctx);
+
+	rkvpu_job_finish(ctx, VB2_BUF_STATE_ERROR);
 }
 
 static const struct of_device_id of_rkvpu_match[] = {

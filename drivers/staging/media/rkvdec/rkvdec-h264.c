@@ -1175,6 +1175,31 @@ static int rkvdec_h264_run(struct rkvpu_ctx *ctx)
 	return 0;
 }
 
+static int rkvdec_h264_irq(struct rkvpu_ctx *ctx)
+{
+	struct rkvpu_dev *rkvpu = ctx->dev;
+	enum vb2_buffer_state state;
+	u32 status;
+
+	status = readl(rkvpu->regs + RKVDEC_REG_INTERRUPT);
+	state = (status & RKVDEC_RDY_STA) ?
+		VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
+
+	writel(0, rkvpu->regs + RKVDEC_REG_INTERRUPT);
+
+	return state;
+}
+
+static int rkvdec_h264_watchdog(struct rkvpu_ctx *ctx)
+{
+	struct rkvpu_dev *rkvpu = ctx->dev;
+
+	writel(RKVDEC_IRQ_DIS, rkvpu->regs + RKVDEC_REG_INTERRUPT);
+	writel(0, rkvpu->regs + RKVDEC_REG_SYSCTRL);
+
+	return 0;
+}
+
 static int rkvdec_h264_try_ctrl(struct rkvpu_ctx *ctx, struct v4l2_ctrl *ctrl)
 {
 	if (ctrl->id == V4L2_CID_STATELESS_H264_SPS)
@@ -1188,5 +1213,7 @@ const struct rkvpu_ops rkvdec_h264_fmt_ops = {
 	.start = rkvdec_h264_start,
 	.stop = rkvdec_h264_stop,
 	.run = rkvdec_h264_run,
+	.irq = rkvdec_h264_irq,
+	.watchdog = rkvdec_h264_watchdog,
 	.try_ctrl = rkvdec_h264_try_ctrl,
 };
