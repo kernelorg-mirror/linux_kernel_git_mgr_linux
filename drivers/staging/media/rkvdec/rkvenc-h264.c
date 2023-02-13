@@ -352,8 +352,9 @@ static void setup_vepu541_codec(struct rkvpu_ctx *ctx, struct rkvenc_h264_run *r
 	pps = run->pps;
 
 	regmap_field_write(h264_ctx->l1_fields[ENC_STND], 0);
+	// FIXME: CUR_FRM_REF needs to be 0 to avoid paging errors in iommu
 	regmap_field_write(h264_ctx->l1_fields[CUR_FRM_REF],
-			   encode_params->nal_reference_idc > 0);
+			   /* encode_params->nal_reference_idc > */ 0 );
 	regmap_field_write(h264_ctx->l1_fields[BS_SCP], 1);
 	regmap_field_write(h264_ctx->l1_fields[LAMB_MOD_SEL],
 			   (encode_params->slice_type == V4L2_H264_SLICE_TYPE_I) ? 0 : 1);
