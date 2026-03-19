@@ -7,6 +7,7 @@ import logging
 import socket
 import struct
 import time
+import sys
 
 import usb.core
 import usb.util
@@ -102,6 +103,7 @@ class Forwarder:
         self.ep_out = ep_out
         self.ep_in = ep_in
         self.dev = dev
+        self.intf_num = usb9pfs.bInterfaceNumber
 
         # create and connect socket
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -185,6 +187,17 @@ class Forwarder:
         self.log_stats()
         self.stats_logged = time.monotonic()
 
+    def close(self):
+        """release the TCP socket and USB interface claimed in __init__"""
+        try:
+            self.s.close()
+        except OSError:
+            pass
+        try:
+            usb.util.release_interface(self.dev, self.intf_num)
+        except usb.core.USBError:
+            pass
+
 
 def try_get_usb_str(dev, name):
     try:
@@ -211,16 +224,38 @@ def list_usb(args):
 def connect(args):
     vid, pid = [int(x, 16) for x in args.id.split(":", 1)]
 
-    f = Forwarder(server=(args.server, args.port), vid=vid, pid=pid, path=args.path)
+    i = 0
+    f = None
+    while True:
+        if f is not None:
+            # release the previous session's socket/USB resources before
+            # trying to establish a new one, instead of leaking them for as
+            # long as the device or server stays unreachable
+            f.close()
+            f = None
 
-    try:
-        while True:
-            f.c2s()
-            f.s2c()
-            f.log_stats_interval()
-    finally:
-        f.log_stats()
+        try:
+            f = Forwarder(server=(args.server, args.port), vid=vid, pid=pid, path=args.path)
+        except (ValueError, usb.core.USBError, OSError) as e:
+            time.sleep(1)
+            print(f"\rdevice not found since {i} seconds, retrying", end="")
+            sys.stdout.flush()
+            i = i + 1
+            continue
 
+        if i:
+            print()
+        i = 0
+
+        try:
+            while True:
+                f.c2s()
+                f.s2c()
+                f.log_stats_interval()
+        except (ValueError, usb.core.USBError, OSError, struct.error) as e:
+            logging.info("disconnected, retrying")
+        finally:
+            f.log_stats()
 
 def main():
     parser = argparse.ArgumentParser(
