@@ -74,7 +74,7 @@ class Forwarder:
                 if dev.is_kernel_driver_active(intf.bInterfaceNumber):
                     dev.detach_kernel_driver(intf.bInterfaceNumber)
 
-            if intf.bInterfaceClass == 0xFF and intf.bInterfaceSubClass == 0xFF and intf.bInterfaceProtocol == 0x09:
+            if intf.bInterfaceClass == 0xFF and intf.bInterfaceSubClass == 0xFF and intf.bInterfaceProtocol == 0x09 and intf.bNumEndpoints == 2:
                 usb9pfs = intf
         if usb9pfs is None:
             raise ValueError("Interface not found")
@@ -104,6 +104,16 @@ class Forwarder:
         self.ep_in = ep_in
         self.dev = dev
         self.intf_num = usb9pfs.bInterfaceNumber
+
+        logging.info(f"setting alt mode {usb9pfs.bAlternateSetting} interface:\n{usb9pfs}")
+        try:
+            self.dev.set_interface_altsetting(usb9pfs.bInterfaceNumber, usb9pfs.bAlternateSetting)
+        except usb.core.USBError as e:
+            if e.errno is None:
+                logging.debug("could not switch to alt %d, retry: %s",
+                               usb9pfs.bAlternateSetting, repr(e))
+                raise ValueError("mount is not ready yet")
+            raise
 
         # create and connect socket
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
