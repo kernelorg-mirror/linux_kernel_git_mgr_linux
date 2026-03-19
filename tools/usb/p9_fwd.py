@@ -109,13 +109,12 @@ class Forwarder:
 
         logging.info("connected to server")
 
-    def c2s(self):
-        """forward a request from the USB client to the TCP server"""
-        data = None
-        while data is None:
+    def _ep_in_read(self, size):
+        """read up to `size` bytes from ep_in, retrying on timeout/EIO and
+        raising ValueError("disconnected") once the device is gone"""
+        while True:
             try:
-                logging.log(logging.TRACE, "c2s: reading")
-                data = self.ep_in.read(self.ep_in.wMaxPacketSize)
+                return self.ep_in.read(size)
             except usb.core.USBTimeoutError:
                 logging.log(logging.TRACE, "c2s: reading timed out")
                 continue
@@ -124,11 +123,29 @@ class Forwarder:
                     logging.debug("c2s: reading failed with %s, retrying", repr(e))
                     time.sleep(0.5)
                     continue
+                elif e.errno == errno.ENODEV:
+                    logging.debug("c2s: reading failed with %s", repr(e))
+                    raise ValueError("disconnected")
                 logging.error("c2s: reading failed with %s, aborting", repr(e))
                 raise
+
+    def _ep_out_write(self, data):
+        """write to ep_out, raising ValueError("disconnected") once the
+        device is gone"""
+        try:
+            return self.ep_out.write(data)
+        except usb.core.USBError as e:
+            if e.errno == errno.EIO or e.errno == errno.ENODEV:
+                raise ValueError("disconnected")
+            raise
+
+    def c2s(self):
+        """forward a request from the USB client to the TCP server"""
+        logging.log(logging.TRACE, "c2s: reading")
+        data = self._ep_in_read(self.ep_in.wMaxPacketSize)
         size = struct.unpack("<I", data[:4])[0]
         while len(data) < size:
-            data += self.ep_in.read(size - len(data))
+            data += self._ep_in_read(size - len(data))
         logging.log(logging.TRACE, "c2s: writing")
         self._log_hexdump(data)
         self.s.send(data)
@@ -146,12 +163,12 @@ class Forwarder:
         logging.log(logging.TRACE, "s2c: writing")
         self._log_hexdump(data)
         while data:
-            written = self.ep_out.write(data)
+            written = self._ep_out_write(data)
             assert written > 0
             data = data[written:]
         if size % self.ep_out.wMaxPacketSize == 0:
             logging.log(logging.TRACE, "sending zero length packet")
-            self.ep_out.write(b"")
+            self._ep_out_write(b"")
         logging.debug("s2c: forwarded %i bytes", size)
         self.stats["s2c packets"] += 1
         self.stats["s2c bytes"] += size
