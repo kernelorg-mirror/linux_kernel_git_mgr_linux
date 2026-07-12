@@ -52,6 +52,14 @@ struct f_usb9pfs {
 
 	struct completion send;
 
+	/*
+	 * The single p9 request currently owned by this transport, from the
+	 * moment it is queued for transmit until its reply arrives or an
+	 * error resolves it. Protected by lock. Holds a reference taken by
+	 * usb9pfs_transmit() via p9_req_get().
+	 */
+	struct p9_req_t *pending_req;
+
 	unsigned int buflen;
 
 	struct usb_function function;
@@ -107,14 +115,11 @@ static int usb9pfs_queue_tx(struct f_usb9pfs *usb9pfs, struct p9_req_t *p9_tx_re
 
 	req->buf = p9_tx_req->tc.sdata;
 	req->length = p9_tx_req->tc.size;
-	req->context = p9_tx_req;
 
 	dev_dbg(&cdev->gadget->dev, "%s usb9pfs send --> %d/%d, zero: %d\n",
 		usb9pfs->in_ep->name, req->actual, req->length, req->zero);
 
 	ret = usb_ep_queue(usb9pfs->in_ep, req, gfp_flags);
-	if (ret)
-		req->context = NULL;
 
 	dev_dbg(&cdev->gadget->dev, "tx submit --> %d\n", ret);
 
@@ -147,6 +152,7 @@ static int usb9pfs_transmit(struct f_usb9pfs *usb9pfs, struct p9_req_t *p9_req)
 	list_del(&p9_req->req_list);
 
 	p9_req_get(p9_req);
+	usb9pfs->pending_req = p9_req;
 
 	return ret;
 }
@@ -158,35 +164,54 @@ static void usb9pfs_tx_complete(struct usb_ep *ep, struct usb_request *req)
 	struct p9_client *client;
 	struct p9_req_t *p9_tx_req;
 	unsigned long flags;
+	int ret = -ECONNRESET;
 
 	/* reset zero packages */
 	req->zero = 0;
 
+	spin_lock_irqsave(&usb9pfs->lock, flags);
+
+	client = usb9pfs->client;
+	p9_tx_req = usb9pfs->pending_req;
+
 	if (req->status) {
 		dev_err(&cdev->gadget->dev, "%s usb9pfs complete --> %d, %d/%d\n",
 			ep->name, req->status, req->actual, req->length);
-		return;
+		goto fail;
 	}
 
 	dev_dbg(&cdev->gadget->dev, "%s usb9pfs complete --> %d, %d/%d\n",
 		ep->name, req->status, req->actual, req->length);
 
-	spin_lock_irqsave(&usb9pfs->lock, flags);
-	client = usb9pfs->client;
-	p9_tx_req = req->context;
-	req->context = NULL;
-
 	if (!client || !p9_tx_req)
-		goto unlock_complete;
+		goto fail;
 
 	WRITE_ONCE(p9_tx_req->status, REQ_STATUS_SENT);
 
-	p9_req_put(client, p9_tx_req);
+	ret = usb9pfs_queue_rx(usb9pfs, usb9pfs->out_req, GFP_ATOMIC);
+	if (ret)
+		goto fail;
 
-unlock_complete:
+	/* pending_req stays owned by the transport until the RX reply
+	 * arrives, or an error resolves it from rx_complete()/clear_tx().
+	 */
 	spin_unlock_irqrestore(&usb9pfs->lock, flags);
+	return;
 
-	usb9pfs_queue_rx(usb9pfs, usb9pfs->out_req, GFP_ATOMIC);
+fail:
+	usb9pfs->pending_req = NULL;
+
+	if (client && p9_tx_req) {
+		if (!p9_tx_req->t_err)
+			p9_tx_req->t_err = ret;
+		p9_client_cb(client, p9_tx_req, REQ_STATUS_ERROR);
+		p9_req_put(client, p9_tx_req);
+	}
+
+	if (client)
+		complete(&usb9pfs->send);
+
+	spin_unlock_irqrestore(&usb9pfs->lock, flags);
 }
 
 static struct p9_req_t *usb9pfs_rx_header(struct f_usb9pfs *usb9pfs,
@@ -247,18 +272,21 @@ static void usb9pfs_rx_complete(struct usb_ep *ep, struct usb_request *req)
 	struct usb_composite_dev *cdev = usb9pfs->function.config->cdev;
 	struct p9_client *client;
 	struct p9_req_t *p9_rx_req;
+	struct p9_req_t *pending;
 	unsigned int req_size = req->actual;
 	unsigned long flags;
 	int status = REQ_STATUS_RCVD;
 
+	spin_lock_irqsave(&usb9pfs->lock, flags);
+
+	client = usb9pfs->client;
+
 	if (req->status) {
 		dev_err(&cdev->gadget->dev, "%s usb9pfs complete --> %d, %d/%d\n",
 			ep->name, req->status, req->actual, req->length);
-		return;
+		goto fail;
 	}
 
-	spin_lock_irqsave(&usb9pfs->lock, flags);
-	client = usb9pfs->client;
 	if (!client) {
 		spin_unlock_irqrestore(&usb9pfs->lock, flags);
 		return;
@@ -266,7 +294,7 @@ static void usb9pfs_rx_complete(struct usb_ep *ep, struct usb_request *req)
 
 	p9_rx_req = usb9pfs_rx_header(usb9pfs, client, req->buf);
 	if (!p9_rx_req)
-		goto out_unlock;
+		goto fail;
 
 	if (req_size > p9_rx_req->rc.capacity) {
 		dev_err(&cdev->gadget->dev,
@@ -283,10 +311,39 @@ static void usb9pfs_rx_complete(struct usb_ep *ep, struct usb_request *req)
 	p9_client_cb(client, p9_rx_req, status);
 	p9_req_put(client, p9_rx_req);
 
-out_unlock:
+	pending = usb9pfs->pending_req;
+	usb9pfs->pending_req = NULL;
+	if (pending)
+		p9_req_put(client, pending);
+
 	spin_unlock_irqrestore(&usb9pfs->lock, flags);
 
 	complete(&usb9pfs->send);
+	return;
+
+fail:
+	/*
+	 * Either the OUT transfer itself failed, or the received data could
+	 * not be matched to the pending request (malformed header, tag
+	 * mismatch, oversized reply). Either way no valid reply for
+	 * pending_req will ever arrive on this transfer: resolve it with an
+	 * error instead of leaving its caller blocked forever, and restore
+	 * the send token so the transport can be used again.
+	 */
+	pending = usb9pfs->pending_req;
+	usb9pfs->pending_req = NULL;
+
+	if (client && pending) {
+		if (!pending->t_err)
+			pending->t_err = -ECONNRESET;
+		p9_client_cb(client, pending, REQ_STATUS_ERROR);
+		p9_req_put(client, pending);
+	}
+
+	spin_unlock_irqrestore(&usb9pfs->lock, flags);
+
+	if (client)
+		complete(&usb9pfs->send);
 }
 
 static void disable_ep(struct usb_composite_dev *cdev, struct usb_ep *ep)
@@ -452,9 +509,8 @@ static void usb9pfs_clear_tx(struct f_usb9pfs *usb9pfs)
 	spin_lock_irqsave(&usb9pfs->lock, flags);
 	client = usb9pfs->client;
 	usb9pfs->client = NULL;
-	req = usb9pfs->in_req ? usb9pfs->in_req->context : NULL;
-	if (usb9pfs->in_req)
-		usb9pfs->in_req->context = NULL;
+	req = usb9pfs->pending_req;
+	usb9pfs->pending_req = NULL;
 	spin_unlock_irqrestore(&usb9pfs->lock, flags);
 
 	if (!req || !client)
@@ -464,6 +520,7 @@ static void usb9pfs_clear_tx(struct f_usb9pfs *usb9pfs)
 		req->t_err = -ECONNRESET;
 
 	p9_client_cb(client, req, REQ_STATUS_ERROR);
+	p9_req_put(client, req);
 }
 
 static void p9_usbg_close(struct p9_client *client)
