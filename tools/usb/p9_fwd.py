@@ -27,6 +27,12 @@ def path_from_usb_dev(dev):
 
 HEXDUMP_FILTER = "".join(chr(x).isprintable() and chr(x) or "." for x in range(128)) + "." * 128
 
+# Generous upper bound on a single 9p message, well above any reasonable
+# msize/gadget buflen. The leading 4-byte size field is otherwise untrusted
+# input: without a bound, a corrupted or malicious size causes the forwarder
+# to try to allocate and accumulate an arbitrarily large buffer.
+MAX_9P_MESSAGE_SIZE = 16 * 1024 * 1024
+
 
 class Forwarder:
     @staticmethod
@@ -151,11 +157,26 @@ class Forwarder:
                 raise ValueError("disconnected")
             raise
 
+    def _recv_exact(self, n):
+        """read exactly n bytes from the TCP socket, raising
+        ValueError("disconnected") on a graceful close"""
+        data = b""
+        while len(data) < n:
+            chunk = self.s.recv(n - len(data))
+            if not chunk:
+                raise ValueError("disconnected")
+            data += chunk
+        return data
+
     def c2s(self):
         """forward a request from the USB client to the TCP server"""
         logging.log(logging.TRACE, "c2s: reading")
         data = self._ep_in_read(self.ep_in.wMaxPacketSize)
+        if len(data) < 4:
+            raise ValueError("c2s: short initial read, disconnecting")
         size = struct.unpack("<I", data[:4])[0]
+        if size < 4 or size > MAX_9P_MESSAGE_SIZE:
+            raise ValueError(f"c2s: implausible message size {size}, disconnecting")
         while len(data) < size:
             data += self._ep_in_read(size - len(data))
         logging.log(logging.TRACE, "c2s: writing")
@@ -168,10 +189,11 @@ class Forwarder:
     def s2c(self):
         """forward a response from the TCP server to the USB client"""
         logging.log(logging.TRACE, "s2c: reading")
-        data = self.s.recv(4)
-        size = struct.unpack("<I", data[:4])[0]
-        while len(data) < size:
-            data += self.s.recv(size - len(data))
+        header = self._recv_exact(4)
+        size = struct.unpack("<I", header)[0]
+        if size < 4 or size > MAX_9P_MESSAGE_SIZE:
+            raise ValueError(f"s2c: implausible message size {size}, disconnecting")
+        data = header + self._recv_exact(size - 4)
         logging.log(logging.TRACE, "s2c: writing")
         self._log_hexdump(data)
         while data:
