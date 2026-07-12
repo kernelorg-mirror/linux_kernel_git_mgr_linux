@@ -566,8 +566,10 @@ static int p9_usbg_request(struct p9_client *client, struct p9_req_t *p9_req)
 		return ret;
 
 	ret = usb9pfs_transmit(usb9pfs, p9_req);
-	if (ret)
+	if (ret) {
+		complete(&usb9pfs->send);
 		return ret;
+	}
 
 	return 0;
 
