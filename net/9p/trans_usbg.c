@@ -149,8 +149,6 @@ static int usb9pfs_transmit(struct f_usb9pfs *usb9pfs, struct p9_req_t *p9_req)
 	if (ret)
 		return ret;
 
-	list_del(&p9_req->req_list);
-
 	p9_req_get(p9_req);
 	usb9pfs->pending_req = p9_req;
 
